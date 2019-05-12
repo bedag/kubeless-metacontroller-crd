@@ -1,0 +1,190 @@
+---
+apiVersion: 'kubeless.io/v1beta1'
+kind: 'Function'
+metadata:
+  name: 'controller'
+  namespace: 'objectstore'
+spec:
+  runtime: 'ruby2.5'
+  timeout: '180'
+  handler: 'handler.sync'
+  function-content-type: 'text'
+  function: |
+    require 'json'
+    require 'base64'
+
+    def self.generateCode(number)
+      charset = Array('A'..'Z') + Array('a'..'z') + Array(0..9)
+      Array.new(number) { charset.sample }.join
+    end
+
+    def self.generateResources(parent,children)
+      result = []
+      oAccessKey = children.fetch('Secret.v1',{}).fetch(parent['metadata']['name'],{}).fetch('data',{}).fetch('accesskey','')
+      oSecretKey = children.fetch('Secret.v1',{}).fetch(parent['metadata']['name'],{}).fetch('data',{}).fetch('secretkey','')
+      accessKey =  oAccessKey.empty? ? Base64.strict_encode64(generateCode(20).upcase) : oAccessKey
+      secretKey = oSecretKey.empty? ? Base64.strict_encode64(generateCode(45)) : oSecretKey
+      secret = {
+        'apiVersion' => 'v1',
+        'kind' => 'Secret',
+        'metadata' => {
+          'name' => parent['metadata']['name'],
+          'namespace' => parent['metadata']['namespace'],
+          'labels' => parent['spec']['labels']
+        },
+        'type' => 'Opaque',
+        'data' => {
+          'accesskey' => accessKey,
+          'secretkey' => secretKey
+        }
+      }
+      result << secret
+    
+      pvc = {
+        'apiVersion' => 'v1',
+        'kind' => 'PersistentVolumeClaim',
+        'metadata' => {
+          'name' => parent['metadata']['name'],
+          'namespace' => parent['metadata']['namespace'],
+          'labels' => parent['spec']['labels']
+        },
+        'spec' => {
+          'accessModes' => ['ReadWriteOnce'],
+          'resources' => {
+            'requests' => {
+              'storage' => parent['spec']['storage']['size']
+            }
+          },
+          'storageClassName' => parent['spec']['storage']['class']
+        }
+      }
+      result << pvc
+    
+      service = {
+        'apiVersion' => 'v1',
+        'kind' => 'Service',
+        'metadata' => {
+          'name' => parent['metadata']['name'],
+          'namespace' => parent['metadata']['namespace'],
+          'labels' => parent['spec']['labels']
+        },
+        'spec' => {
+          'type' => 'ClusterIP',
+          'ports' => [{
+            'name' => 'service',
+            'port' => 9000,
+            'targetPort' => 9000,
+            'protocol' => 'TCP'
+          }],
+          'selector' => parent['spec']['labels']
+        }
+      }
+      result << service
+    
+      registry = parent['spec'].fetch('image',{}).fetch('registry','')
+      repo = parent['spec'].fetch('image',{}).fetch('repository','minio/minio')
+      tag = parent['spec'].fetch('image',{}).fetch('tag','latest')
+      image = "#{registry}#{registry.empty? ? '' : '/' }#{repo}:#{tag}"
+      deployment = {
+        'apiVersion' => 'apps/v1',
+        'kind' => 'Deployment',
+        'metadata' => {
+          'name' => parent['metadata']['name'],
+          'namespace' => parent['metadata']['namespace'],
+          'labels' => parent['spec']['labels']
+        },
+        'spec' => {
+          'replicas' => 1,
+          'selector' => {
+            'matchLabels' => parent['spec']['labels']
+          },
+          'template' => {
+            'metadata' => {
+              'labels' => parent['spec']['labels']
+            },
+            'spec' => {
+              'containers' => [{
+                'name' => 'minio',
+                'image' => image,
+                'imagePullPolicy' => 'IfNotPresent',
+                'args' => ["server", "/export"],
+                'ports' => [{
+                  'name' => 'service',
+                  'containerPort' => 9000
+                }],
+                'env' => [
+                  {
+                    'name' => 'MINIO_ACCESS_KEY',
+                    'valueFrom' => {
+                      'secretKeyRef' => {
+                        'name' => parent['metadata']['name'],
+                        'key' => 'accesskey'
+                      }
+                    }
+                  },
+                  {
+                    'name' => 'MINIO_SECRET_KEY',
+                    'valueFrom' => {
+                      'secretKeyRef' => {
+                        'name' => parent['metadata']['name'],
+                        'key' => 'secretkey'
+                      }
+                    }
+                  }
+                ],
+                'livenessProbe' => {
+                  'tcpSocket' => {
+                    'port' => 9000
+                  },
+                  'timeoutSeconds' => 1
+                }
+              }],
+              'volumes' => [
+                {
+                  'name' => 'minio-user',
+                  'secret' => {
+                    'secretName' => parent['metadata']['name']
+                  }
+                }
+              ]
+            }
+          }
+        }
+      }
+      result << deployment
+      return result
+    end
+    
+    def sync(event,context)
+      parent = event[:data]['parent']
+      children = event[:data]['children']
+      desiredStatus = {}
+    
+      desiredResources = generateResources(parent,children)
+      result = {"status" => desiredStatus, "children" => desiredResources}.to_json
+      return result
+    end
+    
+    if __FILE__ == $0
+      require 'yaml'
+      if ARGV.length == 1
+        resourceFile = ARGV[0]
+      else
+        puts("Missing argument!")
+        puts("Usage: #{$0} resources.yaml")
+        exit(1)
+      end
+    
+      begin
+        data = YAML.load_file(resourceFile)
+      rescue Psych::SyntaxError => e
+        puts("Failed to parse '#{resourceFile}' as yaml: #{e}")
+        exit(1)
+      rescue Errno::ENOENT => e
+        puts("File '#{resourceFile}' not found!")
+        exit(1)
+      end
+    
+      resources = generateResources(data,{})
+      puts(YAML.dump_stream(*resources))
+    end

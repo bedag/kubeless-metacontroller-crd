@@ -1,0 +1,31 @@
+---
+apiVersion: 'metacontroller.k8s.io/v1alpha1'
+kind: 'CompositeController'
+metadata:
+  name: 'objectstore-controller'
+spec:
+  generateSelector: false
+  parentResource:
+    apiVersion: 'unstable.mycompany.com/v1alpha1'
+    resource: 'objectstores'
+  hooks:
+    sync:
+      webhook:
+        url: 'http://controller.objectstore:8080/'
+  childResources:
+  - apiVersion: 'v1'
+    resource: 'services'
+    updateStrategy:
+      method: 'Recreate'
+  - apiVersion: 'apps/v1'
+    resource: 'deployments'
+    updateStrategy:
+      method: 'InPlace'
+  - apiVersion: 'v1'
+    resource: 'secrets'
+    updateStrategy:
+      method: 'InPlace'
+  - apiVersion: 'v1'
+    resource: 'persistentvolumeclaims'
+    updateStrategy:
+      method: 'InPlace'

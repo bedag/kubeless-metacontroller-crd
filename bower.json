@@ -1,0 +1,21 @@
+{
+  "name": "kubeless-metacontroller-crd-slides",
+  "description": "",
+  "main": "source.html",
+  "authors": [
+    "Michael Gruener"
+  ],
+  "license": "MIT",
+  "homepage": "",
+  "private": true,
+  "ignore": [
+    "**/.*",
+    "node_modules",
+    "bower_components",
+    "test",
+    "tests"
+  ],
+  "dependencies": {
+    "reveal.js-plugins": "*"
+  }
+}

@@ -1,0 +1,20 @@
+apiVersion: 'unstable.mycompany.com/v1alpha1'
+kind: 'Objectstore'
+metadata:
+  name: 'myobjectstore'
+  namespace: 'myproject'
+spec:
+  selector:
+    matchLabels:
+      project: 'myproject'
+      app: 'myobjectstore'
+  labels:
+    project: 'myproject'
+    app: 'myobjectstore'
+  image:
+    registry: ''
+    repository: 'minio/minio'
+    tag: 'latest'
+  storage:
+    size: '8Gi'
+    class: 'default'
